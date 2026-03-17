@@ -7,7 +7,6 @@ st.title("CFAT Defect Analysis Tool")
 uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xlsm"])
 
 if uploaded_file:
-    # Load data
     df = pd.read_excel(uploaded_file)
     
     # --- Validate required columns ---
@@ -28,9 +27,17 @@ if uploaded_file:
         st.stop()
 
     # --- Prepare data ---
-    df["was_audited"] = df["was_audited"].astype(bool)  # Ensure boolean
+    # Convert `was_audited` to boolean (handle Yes/No, True/False, 1/0)
+    if df["was_audited"].dtype == "object":
+        df["was_audited"] = df["was_audited"].map({
+            "Yes": True, "No": False,
+            "True": True, "False": False,
+            "1": True, "0": False
+        }).fillna(False)
+    else:
+        df["was_audited"] = df["was_audited"].astype(bool)
     
-    # Convert all defect columns to boolean (handle string/numeric representations)
+    # Convert all defect columns to boolean
     defect_cols = [
         "audit_grammar_mistakes_serious", "audit_inappropriate_language",
         "audit_innacurate_serious", "audit_nonsensical_language",
@@ -42,7 +49,7 @@ if uploaded_file:
     ]
     
     for col in defect_cols:
-        if df[col].dtype == 'object':
+        if df[col].dtype == "object":
             df[col] = df[col].map({
                 'True': True, 'False': False,
                 'Yes': True, 'No': False,
@@ -52,9 +59,9 @@ if uploaded_file:
 
     total_records = len(df)
 
-    # ----------------------------------------------------------------------
-    # 1. SERIOUS DEFECTS (P0) - USE AUDIT TRUE COUNTS ONLY
-    # ----------------------------------------------------------------------
+    # --------------------------------------------------------------
+    # 1. SERIOUS DEFECTS (P0) - AUDIT ONLY
+    # --------------------------------------------------------------
     p0_cols = [
         "audit_grammar_mistakes_serious",
         "audit_inappropriate_language",
@@ -63,12 +70,12 @@ if uploaded_file:
         "audit_not_concise_serious"
     ]
     
-    # Count TRUE values in audit columns (ignores was_audited for P0)
+    # Count TRUE in audit columns (P0 defects)
     p0_counts = df[p0_cols].sum().astype(int)
     
-    # ----------------------------------------------------------------------
-    # 2. SOFT DEFECTS (P1) - COMBINE AUDIT/ORIGINAL BASED ON was_audited
-    # ----------------------------------------------------------------------
+    # --------------------------------------------------------------
+    # 2. SOFT DEFECTS (P1) - COMBINE AUDIT/ORIGINAL
+    # --------------------------------------------------------------
     p1_audit_cols = [
         "audit_grammar_mistakes_soft",
         "audit_innacurate_soft",
@@ -84,18 +91,17 @@ if uploaded_file:
     p1_counts = pd.Series(index=p1_audit_cols, dtype=int)
     
     for audit_col, orig_col in zip(p1_audit_cols, original_cols):
-        # Use audit result if was_audited=True, else use original decision
+        # Use audit if audited, else original
         effective = np.where(
             df["was_audited"],
             df[audit_col],
             df[orig_col]
         ).astype(bool)
-        
         p1_counts[audit_col] = effective.sum().astype(int)
 
-    # ----------------------------------------------------------------------
+    # --------------------------------------------------------------
     # 3. TOTALLY DEFECT FREE - NO P0 AND NO P1 DEFECTS
-    # ----------------------------------------------------------------------
+    # --------------------------------------------------------------
     # P0 defects: any audit_P0 column is True
     has_p0_defect = df[p0_cols].any(axis=1)
     
@@ -108,16 +114,16 @@ if uploaded_file:
             df[orig_col]
         ).astype(bool)
     
-    totally_defect_free = (~has_p0_defect & ~has_p1_defect).sum().astype(int)
+    totally_defect_free = ((~has_p0_defect) & (~has_p1_defect)).sum().astype(int)
 
-    # ----------------------------------------------------------------------
+    # --------------------------------------------------------------
     # 4. P0 FREE - NO SERIOUS DEFECTS (AUDIT ONLY)
-    # ----------------------------------------------------------------------
+    # --------------------------------------------------------------
     p0_free = (~df[p0_cols].any(axis=1)).sum().astype(int)
 
-    # ----------------------------------------------------------------------
-    # DISPLAY METRICS (1 DECIMAL PLACE FOR PERCENTAGES)
-    # ----------------------------------------------------------------------
+    # --------------------------------------------------------------
+    # DISPLAY METRICS (1 DECIMAL PLACE)
+    # --------------------------------------------------------------
     st.subheader("Summary Metrics")
     st.metric("Total Records", total_records)
     st.metric("Totally Defect Free", 
@@ -125,9 +131,9 @@ if uploaded_file:
     st.metric("P0 Free", 
               f"{p0_free} ({p0_free / total_records:.1%})")
 
-    # ----------------------------------------------------------------------
+    # --------------------------------------------------------------
     # DEFECT BREAKDOWN TABLE
-    # ----------------------------------------------------------------------
+    # --------------------------------------------------------------
     st.subheader("Defect Breakdown")
     breakdown = pd.DataFrame({
         "Defect": [
@@ -143,7 +149,6 @@ if uploaded_file:
         "Count": list(p0_counts.values) + list(p1_counts.values)
     })
     
-    # Format percentages with 1 decimal place (e.g., 43.6%)
     breakdown["Percentage"] = breakdown["Count"] / total_records
     breakdown["Percentage"] = breakdown["Percentage"].map("{:.1%}".format)
     
