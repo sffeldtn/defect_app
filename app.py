@@ -13,26 +13,58 @@ if uploaded_file:
     # ------------------------------
     # Define defect columns
     # ------------------------------
-    p0_cols = ["Serious Grammar", "Inappropriate Language", "Serious Inaccuracy",
-               "Nonsensical Language", "Serious Concise"]
+    # P0 - serious defects (auditor only)
+    p0_cols = [
+        "audit_grammar_mistakes_serious",
+        "audit_innacurate_serious",
+        "audit_inappropriate_language",
+        "audit_nonsensical_language",
+        "audit_not_concise_serious"
+    ]
 
-    p1_annotator_cols = ["Grammar Soft", "Inaccurate Soft", "Concise Soft"]
-    p1_auditor_cols = ["Grammar Soft Auditor", "Inaccurate Soft Auditor", "Concise Soft Auditor"]
+    # P1 - soft defects
+    p1_auditor_cols = [
+        "audit_grammar_mistakes_soft",
+        "audit_innacurate_soft",
+        "audit_not_concise_soft"
+    ]
+    p1_annotator_cols = [
+        "original_grammar_soft",
+        "original_innacurate_soft",
+        "original_not_concise_soft"
+    ]
 
     was_audited_col = "was_audited"
-
     total_records = len(df)
+
+    # ------------------------------
+    # Check columns exist
+    # ------------------------------
+    existing_p0_cols = [col for col in p0_cols if col in df.columns]
+    missing_p0_cols = [col for col in p0_cols if col not in df.columns]
+    if missing_p0_cols:
+        st.warning(f"The following P0 columns are missing and will be skipped: {missing_p0_cols}")
+
+    existing_p1_auditor_cols = [col for col in p1_auditor_cols if col in df.columns]
+    existing_p1_annotator_cols = [col for col in p1_annotator_cols if col in df.columns]
+    missing_p1_cols = list(set(p1_auditor_cols + p1_annotator_cols) - set(existing_p1_auditor_cols + existing_p1_annotator_cols))
+    if missing_p1_cols:
+        st.warning(f"The following P1 columns are missing and will be skipped: {missing_p1_cols}")
+
+    if not existing_p0_cols and not existing_p1_annotator_cols:
+        st.error("No valid defect columns were found in your uploaded file.")
+        st.stop()
 
     # ------------------------------
     # Calculate P0 defects (only auditor totals)
     # ------------------------------
-    p0_counts = {col: df[col].sum() for col in p0_cols}
+    p0_counts = {col: df[col].sum() for col in existing_p0_cols}
 
     # ------------------------------
-    # Calculate P1 defects (conditional)
+    # Calculate P1 defects (conditional: audited vs original)
     # ------------------------------
     p1_counts = {}
-    for ann_col, aud_col in zip(p1_annotator_cols, p1_auditor_cols):
+    for ann_col, aud_col in zip(existing_p1_annotator_cols, existing_p1_auditor_cols):
         p1_counts[ann_col] = ((df[was_audited_col] == True) & (df[aud_col] == True)).sum() + \
                              ((df[was_audited_col] == False) & (df[ann_col] == True)).sum()
 
@@ -43,9 +75,9 @@ if uploaded_file:
     p0_free = 0
 
     for idx, row in df.iterrows():
-        has_p0 = any(row[col] == True for col in p0_cols)
+        has_p0 = any(row[col] == True for col in existing_p0_cols)
         has_p1 = False
-        for ann_col, aud_col in zip(p1_annotator_cols, p1_auditor_cols):
+        for ann_col, aud_col in zip(existing_p1_annotator_cols, existing_p1_auditor_cols):
             if row[was_audited_col]:
                 has_p1 |= row[aud_col] == True
             else:
@@ -60,17 +92,17 @@ if uploaded_file:
     # ------------------------------
     st.subheader("Summary Metrics")
     st.write(f"Total records: {total_records}")
-    st.write(f"Totally Defect-Free: {totally_defect_free} ({totally_defect_free/total_records:.2%})")
-    st.write(f"P0-Free: {p0_free} ({p0_free/total_records:.2%})")
-    st.write(f"With P0 Defects: {total_records - p0_free} ({(total_records - p0_free)/total_records:.2%})")
+    st.write(f"Totally Defect-Free: {totally_defect_free} ({totally_defect_free/total_records*100:.1f}%)")
+    st.write(f"P0-Free: {p0_free} ({p0_free/total_records*100:.1f}%)")
+    st.write(f"With P0 Defects: {total_records - p0_free} ({(total_records - p0_free)/total_records*100:.1f}%)")
 
     # ------------------------------
     # Create defect breakdown table
     # ------------------------------
-    defect_types = ["P0"] * len(p0_cols) + ["P1"] * len(p1_counts)
-    defect_names = p0_cols + p1_annotator_cols
+    defect_types = ["P0"] * len(existing_p0_cols) + ["P1"] * len(p1_counts)
+    defect_names = existing_p0_cols + existing_p1_annotator_cols
     defect_totals = list(p0_counts.values()) + list(p1_counts.values())
-    defect_percent = [f"{count/total_records:.2%}" for count in defect_totals]
+    defect_percent = [f"{count/total_records*100:.1f}%" for count in defect_totals]
 
     defect_df = pd.DataFrame({
         "Defect Type": defect_types,
