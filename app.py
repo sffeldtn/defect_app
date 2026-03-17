@@ -9,9 +9,51 @@ uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xlsm"])
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
     
-    # --- Validate required columns ---
-    required_cols = [
-        "was_audited",
+    # ----------------------------------------------------
+    # VALIDATE COLUMNS (MATCH YOUR VBA COLUMN LETTERS)
+    # ----------------------------------------------------
+    # Map VBA column letters to actual column names in your data
+    column_mapping = {
+        # P0 audit columns (M, U, Y, AG, AK)
+        "audit_grammar_mistakes_serious": "M",  # e.g., column M = audit_grammar_mistakes_serious
+        "audit_inappropriate_language": "U",
+        "audit_innacurate_serious": "Y",
+        "audit_nonsensical_language": "AG",
+        "audit_not_concise_serious": "AK",
+        
+        # P1 annotator columns (P, AB, AN)
+        "original_grammar_mistakes_soft": "P",
+        "original_innacurate_soft": "AB",
+        "original_not_concise_soft": "AN",
+        
+        # P1 audit columns (Q, AC, AO)
+        "audit_grammar_mistakes_soft": "Q",
+        "audit_innacurate_soft": "AC",
+        "audit_not_concise_soft": "AO",
+        
+        # was_audited flag (AZ)
+        "was_audited": "AZ"
+    }
+    
+    # Check if mapped columns exist
+    required_columns = list(column_mapping.keys())
+    missing = [col for col in required_columns if col not in df.columns]
+    if missing:
+        st.error(f"Missing columns: {', '.join(missing)}. Ensure your Excel uses the exact column names.")
+        st.stop()
+    
+    # ----------------------------------------------------
+    # PREPARE DATA (EXACTLY LIKE VBA)
+    # ----------------------------------------------------
+    # Convert was_audited to boolean (handle Yes/No, True/False, 1/0)
+    df["was_audited"] = df["was_audited"].astype(str).str.upper().map({
+        "TRUE": True, "FALSE": False,
+        "YES": True, "NO": False,
+        "1": True, "0": False
+    }).fillna(False)
+    
+    # Convert all defect columns to boolean (VBA uses "TRUE"/"FALSE" strings)
+    defect_columns = [
         "audit_grammar_mistakes_serious", "audit_inappropriate_language",
         "audit_innacurate_serious", "audit_nonsensical_language",
         "audit_not_concise_serious",
@@ -21,47 +63,18 @@ if uploaded_file:
         "original_not_concise_soft"
     ]
     
-    missing = [col for col in required_cols if col not in df.columns]
-    if missing:
-        st.error(f"Missing columns: {', '.join(missing)}")
-        st.stop()
-
-    # --- Prepare data ---
-    # Convert `was_audited` to boolean (handle Yes/No, True/False, 1/0)
-    if df["was_audited"].dtype == "object":
-        df["was_audited"] = df["was_audited"].map({
-            "Yes": True, "No": False,
-            "True": True, "False": False,
+    for col in defect_columns:
+        df[col] = df[col].astype(str).str.upper().map({
+            "TRUE": True, "FALSE": False,
+            "YES": True, "NO": False,
             "1": True, "0": False
         }).fillna(False)
-    else:
-        df["was_audited"] = df["was_audited"].astype(bool)
     
-    # Convert all defect columns to boolean
-    defect_cols = [
-        "audit_grammar_mistakes_serious", "audit_inappropriate_language",
-        "audit_innacurate_serious", "audit_nonsensical_language",
-        "audit_not_concise_serious",
-        "audit_grammar_mistakes_soft", "audit_innacurate_soft",
-        "audit_not_concise_soft",
-        "original_grammar_mistakes_soft", "original_innacurate_soft",
-        "original_not_concise_soft"
-    ]
-    
-    for col in defect_cols:
-        if df[col].dtype == "object":
-            df[col] = df[col].map({
-                'True': True, 'False': False,
-                'Yes': True, 'No': False,
-                '1': True, '0': False
-            }).fillna(False)
-        df[col] = df[col].astype(bool)
-
     total_records = len(df)
-
-    # --------------------------------------------------------------
-    # 1. SERIOUS DEFECTS (P0) - AUDIT ONLY
-    # --------------------------------------------------------------
+    
+    # ----------------------------------------------------
+    # 1. P0 DEFECTS (SERIOUS) - AUDIT ONLY (DIRECT COUNT)
+    # ----------------------------------------------------
     p0_cols = [
         "audit_grammar_mistakes_serious",
         "audit_inappropriate_language",
@@ -70,86 +83,85 @@ if uploaded_file:
         "audit_not_concise_serious"
     ]
     
-    # Count TRUE in audit columns (P0 defects)
     p0_counts = df[p0_cols].sum().astype(int)
     
-    # --------------------------------------------------------------
-    # 2. SOFT DEFECTS (P1) - COMBINE AUDIT/ORIGINAL
-    # --------------------------------------------------------------
-    p1_audit_cols = [
-        "audit_grammar_mistakes_soft",
-        "audit_innacurate_soft",
-        "audit_not_concise_soft"
-    ]
+    # ----------------------------------------------------
+    # 2. P1 DEFECTS (SOFT) - COMBINED LOGIC
+    # ----------------------------------------------------
+    p1_defect_types = {
+        "Grammar Soft": ("audit_grammar_mistakes_soft", "original_grammar_mistakes_soft"),
+        "Inaccurate Soft": ("audit_innacurate_soft", "original_innacurate_soft"),
+        "Concise Soft": ("audit_not_concise_soft", "original_not_concise_soft")
+    }
     
-    original_cols = [
-        "original_grammar_mistakes_soft",
-        "original_innacurate_soft",
-        "original_not_concise_soft"
-    ]
+    p1_counts = {}
     
-    p1_counts = pd.Series(index=p1_audit_cols, dtype=int)
-    
-    for audit_col, orig_col in zip(p1_audit_cols, original_cols):
-        # Use audit if audited, else original
+    for defect_name, (audit_col, orig_col) in p1_defect_types.items():
+        # Replicate VBA logic: use audit if was_audited=True, else original
         effective = np.where(
             df["was_audited"],
             df[audit_col],
             df[orig_col]
-        ).astype(bool)
-        p1_counts[audit_col] = effective.sum().astype(int)
-
-    # --------------------------------------------------------------
+        )
+        p1_counts[defect_name] = effective.sum().astype(int)
+    
+    # ----------------------------------------------------
     # 3. TOTALLY DEFECT FREE - NO P0 AND NO P1 DEFECTS
-    # --------------------------------------------------------------
+    # ----------------------------------------------------
     # P0 defects: any audit_P0 column is True
-    has_p0_defect = df[p0_cols].any(axis=1)
+    has_p0 = df[p0_cols].any(axis=1)
     
     # P1 defects: any combined P1 column is True
-    has_p1_defect = pd.Series(False, index=df.index)
-    for audit_col, orig_col in zip(p1_audit_cols, original_cols):
-        has_p1_defect |= np.where(
+    has_p1 = pd.Series(False, index=df.index)
+    for _, (audit_col, orig_col) in p1_defect_types.items():
+        has_p1 |= np.where(
             df["was_audited"],
             df[audit_col],
             df[orig_col]
-        ).astype(bool)
+        )
     
-    totally_defect_free = ((~has_p0_defect) & (~has_p1_defect)).sum().astype(int)
-
-    # --------------------------------------------------------------
+    totally_defect_free = ((~has_p0) & (~has_p1)).sum().astype(int)
+    
+    # ----------------------------------------------------
     # 4. P0 FREE - NO SERIOUS DEFECTS (AUDIT ONLY)
-    # --------------------------------------------------------------
-    p0_free = (~df[p0_cols].any(axis=1)).sum().astype(int)
-
-    # --------------------------------------------------------------
-    # DISPLAY METRICS (1 DECIMAL PLACE)
-    # --------------------------------------------------------------
+    # ----------------------------------------------------
+    p0_free = (~has_p0).sum().astype(int)
+    
+    # ----------------------------------------------------
+    # DISPLAY METRICS (EXACTLY LIKE VBA OUTPUT)
+    # ----------------------------------------------------
     st.subheader("Summary Metrics")
     st.metric("Total Records", total_records)
     st.metric("Totally Defect Free", 
               f"{totally_defect_free} ({totally_defect_free / total_records:.1%})")
     st.metric("P0 Free", 
               f"{p0_free} ({p0_free / total_records:.1%})")
-
-    # --------------------------------------------------------------
-    # DEFECT BREAKDOWN TABLE
-    # --------------------------------------------------------------
+    
+    # ----------------------------------------------------
+    # DEFECT BREAKDOWN TABLE (MATCHING VBA FORMAT)
+    # ----------------------------------------------------
     st.subheader("Defect Breakdown")
-    breakdown = pd.DataFrame({
-        "Defect": [
-            "Serious Grammar",
-            "Inappropriate Language",
-            "Serious Inaccuracy",
-            "Nonsensical Language",
-            "Serious Concise",
-            "Grammar Soft",
-            "Inaccurate Soft",
-            "Concise Soft"
-        ],
-        "Count": list(p0_counts.values) + list(p1_counts.values)
-    })
     
-    breakdown["Percentage"] = breakdown["Count"] / total_records
-    breakdown["Percentage"] = breakdown["Percentage"].map("{:.1%}".format)
+    breakdown_data = []
+    # P0 defects (audit-only)
+    for col, count in p0_counts.items():
+        breakdown_data.append({
+            "Defect": col.replace("audit_", "").replace("_", " ").title(),
+            "Category": "P0",
+            "Count": count,
+            "Percentage": count / total_records
+        })
     
-    st.dataframe(breakdown)
+    # P1 defects (combined)
+    for defect_name, count in p1_counts.items():
+        breakdown_data.append({
+            "Defect": defect_name,
+            "Category": "P1",
+            "Count": count,
+            "Percentage": count / total_records
+        })
+    
+    breakdown_df = pd.DataFrame(breakdown_data)
+    breakdown_df["Percentage"] = breakdown_df["Percentage"].map("{:.1%}".format)
+    
+    st.dataframe(breakdown_df[["Defect", "Category", "Count", "Percentage"]])
