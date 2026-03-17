@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-
 st.title("CFAT Defect Analysis Tool")
 
 uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xlsm"])
@@ -10,8 +9,8 @@ uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xlsm"])
 if uploaded_file:
     # ---- Load data ----
     df = pd.read_excel(uploaded_file)
-
-    # Make sure the required columns are present
+    
+    # Verify required columns exist
     required_cols = [
         "was_audited",
         "audit_grammar_mistakes_serious", "audit_inappropriate_language",
@@ -19,16 +18,18 @@ if uploaded_file:
         "audit_not_concise_serious",
         "audit_grammar_mistakes_soft", "audit_innacurate_soft",
         "audit_not_concise_soft",
-        "grammar_mistakes_soft", "innacurate_soft", "not_concise_soft"
+        "original_grammar_mistakes_soft", "original_innacurate_soft",
+        "original_not_concise_soft"
     ]
+    
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
         st.error(f"Missing required column(s): {', '.join(missing)}")
         st.stop()
 
-    # Ensure the audit flag is treated as a boolean
+    # Ensure correct data types
     df["was_audited"] = df["was_audited"].astype(bool)
-
+    
     total_records = len(df)
 
     # ---- P0 defect columns (unchanged) ----
@@ -40,39 +41,39 @@ if uploaded_file:
         "audit_not_concise_serious"
     ]
 
-    # ---- P1 defect columns (audit version) ----
+    # ---- P1 defect columns mapping ----
+    # Map audit columns to their original counterparts
     p1_audit_cols = [
         "audit_grammar_mistakes_soft",
         "audit_innacurate_soft",
         "audit_not_concise_soft"
     ]
-
-    # Mapping from audit column → original‑decision column
+    
     original_map = {
-        "audit_grammar_mistakes_soft": "grammar_mistakes_soft",
-        "audit_innacurate_soft":      "innacurate_soft",
-        "audit_not_concise_soft":     "not_concise_soft"
+        "audit_grammar_mistakes_soft": "original_grammar_mistakes_soft",
+        "audit_innacurate_soft":      "original_innacurate_soft",
+        "audit_not_concise_soft":     "original_not_concise_soft"
     }
 
-    # ---- Compute P0 counts (same as before) ----
+    # ---- Compute P0 counts ----
     p0_counts = df[p0_cols].eq(True).sum()
 
-    # ---- Compute P1 counts – use audit if was_audited=True, otherwise original ----
+    # ---- Compute P1 counts (audit OR original based on was_audited) ----
     p1_counts = pd.Series(index=p1_audit_cols)
+    
     for audit_col, orig_col in original_map.items():
-        # Select the appropriate boolean value for each row
-        effective = np.where(
-            df["was_audited"],          # condition
-            df[audit_col],              # value if True (audit result)
-            df[orig_col]                # value if False (original decision)
+        # Use audit result if audited, otherwise use original decision
+        effective_values = np.where(
+            df["was_audited"], 
+            df[audit_col],      # audited rows: use audit column
+            df[orig_col]        # unaudited rows: use original column
         )
-        p1_counts[audit_col] = effective.eq(True).sum()
+        p1_counts[audit_col] = effective_values.eq(True).sum()
 
     # ---- Summary metrics ----
-    # P0‑free rows (no serious defects)
     p0_free = (df[p0_cols].eq(True).sum(axis=1) == 0).sum()
-
-    # Build a DataFrame of effective P1 values to decide if *any* soft defect exists
+    
+    # Create effective P1 DataFrame for "any P1 defect" calculation
     effective_p1_df = pd.DataFrame()
     for audit_col, orig_col in original_map.items():
         effective_p1_df[audit_col] = np.where(
@@ -80,11 +81,11 @@ if uploaded_file:
             df[audit_col],
             df[orig_col]
         )
+    
     p1_any = effective_p1_df.eq(True).any(axis=1)
-
-    # Totally defect‑free = no P0 defects **and** no P1 defects
     totally_defect_free = ((df[p0_cols].eq(True).sum(axis=1) == 0) & ~p1_any).sum()
 
+    # Display metrics with WHOLE NUMBER percentages (3% instead of 0.3%)
     st.subheader("Summary Metrics")
     st.metric("Total Records", total_records)
     st.metric("Totally Defect Free", f"{totally_defect_free} ({totally_defect_free/total_records:.0%})")
@@ -105,9 +106,9 @@ if uploaded_file:
         ],
         "Count": list(p0_counts.values) + list(p1_counts.values)
     })
-
-    # Compute percentages and format as “X%” (no decimal percentages)
+    
+    # Format percentages as WHOLE NUMBERS (3% instead of 0.3%)
     breakdown["Percentage"] = breakdown["Count"] / total_records
     breakdown["Percentage"] = breakdown["Percentage"].map("{:.0%}".format)
-
+    
     st.dataframe(breakdown)
