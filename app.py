@@ -7,10 +7,10 @@ st.title("CFAT Defect Analysis Tool")
 uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xlsm"])
 
 if uploaded_file:
-    # ---- Load data ----
+    # Load data
     df = pd.read_excel(uploaded_file)
     
-    # Verify required columns exist
+    # Validate required columns
     required_cols = [
         "was_audited",
         "audit_grammar_mistakes_serious", "audit_inappropriate_language",
@@ -22,17 +22,15 @@ if uploaded_file:
         "original_not_concise_soft"
     ]
     
-    missing = [c for c in required_cols if c not in df.columns]
+    missing = [col for col in required_cols if col not in df.columns]
     if missing:
-        st.error(f"Missing required column(s): {', '.join(missing)}")
+        st.error(f"Missing columns: {', '.join(missing)}")
         st.stop()
 
-    # Ensure correct data types
     df["was_audited"] = df["was_audited"].astype(bool)
-    
     total_records = len(df)
 
-    # ---- P0 defect columns (unchanged) ----
+    # P0 defect columns (serious defects)
     p0_cols = [
         "audit_grammar_mistakes_serious",
         "audit_inappropriate_language",
@@ -41,8 +39,7 @@ if uploaded_file:
         "audit_not_concise_serious"
     ]
 
-    # ---- P1 defect columns mapping ----
-    # Map audit columns to their original counterparts
+    # P1 defect mapping (soft defects)
     p1_audit_cols = [
         "audit_grammar_mistakes_soft",
         "audit_innacurate_soft",
@@ -55,43 +52,45 @@ if uploaded_file:
         "audit_not_concise_soft":     "original_not_concise_soft"
     }
 
-    # ---- Compute P0 counts ----
+    # Calculate P0 counts
     p0_counts = df[p0_cols].eq(True).sum()
 
-    # ---- Compute P1 counts (audit OR original based on was_audited) ----
+    # Calculate P1 counts (use audit if audited, else original)
     p1_counts = pd.Series(index=p1_audit_cols)
     
     for audit_col, orig_col in original_map.items():
-        # Use audit result if audited, otherwise use original decision
+        # Use np.where to select between audit/original values
         effective_values = np.where(
-            df["was_audited"], 
-            df[audit_col],      # audited rows: use audit column
-            df[orig_col]        # unaudited rows: use original column
+            df["was_audited"],
+            df[audit_col],  # Use audit result if audited
+            df[orig_col]    # Fall back to original if not audited
         )
-        p1_counts[audit_col] = effective_values.eq(True).sum()
+        
+        # COUNT TRUES DIRECTLY (NO .eq(True) NEEDED)
+        p1_counts[audit_col] = effective_values.sum()  # <--- FIXED HERE
 
-    # ---- Summary metrics ----
+    # Summary metrics
     p0_free = (df[p0_cols].eq(True).sum(axis=1) == 0).sum()
     
-    # Create effective P1 DataFrame for "any P1 defect" calculation
+    # Build effective P1 DataFrame for "any P1 defect" check
     effective_p1_df = pd.DataFrame()
     for audit_col, orig_col in original_map.items():
         effective_p1_df[audit_col] = np.where(
             df["was_audited"],
             df[audit_col],
             df[orig_col]
-        )
+        ).astype(bool)  # Ensure boolean type
     
-    p1_any = effective_p1_df.eq(True).any(axis=1)
+    p1_any = effective_p1_df.any(axis=1)
     totally_defect_free = ((df[p0_cols].eq(True).sum(axis=1) == 0) & ~p1_any).sum()
 
-    # Display metrics with WHOLE NUMBER percentages (3% instead of 0.3%)
+    # Display metrics with WHOLE-NUMBER percentages
     st.subheader("Summary Metrics")
     st.metric("Total Records", total_records)
     st.metric("Totally Defect Free", f"{totally_defect_free} ({totally_defect_free/total_records:.0%})")
     st.metric("P0 Free",           f"{p0_free} ({p0_free/total_records:.0%})")
 
-    # ---- Defect breakdown table ----
+    # Defect breakdown table
     st.subheader("Defect Breakdown")
     breakdown = pd.DataFrame({
         "Defect": [
@@ -104,10 +103,10 @@ if uploaded_file:
             "Inaccurate Soft",
             "Concise Soft"
         ],
-        "Count": list(p0_counts.values) + list(p1_counts.values)
+        "Count": list(p0_counts.values) + list(p1_counts.values.astype(int))  # Ensure integers
     })
     
-    # Format percentages as WHOLE NUMBERS (3% instead of 0.3%)
+    # Format percentages as whole numbers (e.g., 3% instead of 0.3%)
     breakdown["Percentage"] = breakdown["Count"] / total_records
     breakdown["Percentage"] = breakdown["Percentage"].map("{:.0%}".format)
     
