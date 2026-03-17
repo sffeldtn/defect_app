@@ -29,7 +29,7 @@ if uploaded_file:
         "audit_not_concise_soft"
     ]
     p1_annotator_cols = [
-        "original_grammar_soft",
+        "original_grammar_mistakes_soft",
         "original_innacurate_soft",
         "original_not_concise_soft"
     ]
@@ -61,12 +61,13 @@ if uploaded_file:
     p0_counts = {col: df[col].sum() for col in existing_p0_cols}
 
     # ------------------------------
-    # Calculate P1 defects (conditional: audited vs original)
+    # Calculate P1 defects (audited + original)
     # ------------------------------
     p1_counts = {}
     for ann_col, aud_col in zip(existing_p1_annotator_cols, existing_p1_auditor_cols):
-        p1_counts[ann_col] = ((df[was_audited_col] == True) & (df[aud_col] == True)).sum() + \
-                             ((df[was_audited_col] == False) & (df[ann_col] == True)).sum()
+        audited_true_count = ((df[was_audited_col] == True) & (df[aud_col] == True)).sum()
+        not_audited_count = ((df[was_audited_col] == False) & (df[ann_col] == True)).sum()
+        p1_counts[ann_col] = audited_true_count + not_audited_count
 
     # ------------------------------
     # Summary metrics
@@ -115,27 +116,12 @@ if uploaded_file:
     st.dataframe(defect_df, use_container_width=True)
 
     # ------------------------------
-    # P0, P1, Grand totals
-    # ------------------------------
-    p0_total = sum(p0_counts.values())
-    p1_total = sum(p1_counts.values())
-    grand_total = p0_total + p1_total
-
-    totals_df = pd.DataFrame({
-        "Defect Type": ["P0 TOTAL", "P1 TOTAL", "GRAND TOTAL"],
-        "Count": [p0_total, p1_total, grand_total]
-    })
-    st.subheader("Totals")
-    st.dataframe(totals_df)
-
-    # ------------------------------
     # Download as Excel
     # ------------------------------
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Data")
         defect_df.to_excel(writer, index=False, sheet_name="Defect Breakdown")
-        totals_df.to_excel(writer, index=False, sheet_name="Totals")
     output.seek(0)
 
     st.download_button(
